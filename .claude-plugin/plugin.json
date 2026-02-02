@@ -6,7 +6,7 @@
     "name": "Mephisto405",
     "url": "https://github.com/Mephisto405"
   },
-  "repository": "https://github.com/Mephisto405/claude-code-skills",
+  "repository": "https://github.com/Mephisto405/python-rendering-cc-skill",
   "license": "MIT",
   "keywords": ["rendering", "3d", "python", "nvdiffrast", "pytorch3d", "pyrender", "trimesh", "open3d", "texture", "coordinate-system"]
 }

@@ -5,13 +5,13 @@ Python 3D 렌더링 라이브러리(nvdiffrast, PyTorch3D, pyrender, trimesh, Op
 ## Installation
 
 ```bash
-/plugin install python-rendering@Mephisto405/claude-code-skills
+/plugin install python-rendering@Mephisto405/python-rendering-cc-skill
 ```
 
 또는 로컬 설치:
 
 ```bash
-git clone https://github.com/Mephisto405/claude-code-skills.git
+git clone https://github.com/Mephisto405/python-rendering-cc-skill.git
 claude --plugin-dir ./python-rendering-guide
 ```
 
