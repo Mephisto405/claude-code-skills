@@ -1,0 +1,12 @@
+{
+  "name": "python-rendering",
+  "description": "Python 3D rendering guide for nvdiffrast, PyTorch3D, pyrender, trimesh, Open3D. Includes coordinate system conventions, camera setup, texture rendering, and environment troubleshooting.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Mephisto405",
+    "url": "https://github.com/Mephisto405"
+  },
+  "repository": "https://github.com/Mephisto405/python-rendering-guide",
+  "license": "MIT",
+  "keywords": ["rendering", "3d", "python", "nvdiffrast", "pytorch3d", "pyrender", "trimesh", "open3d", "texture", "coordinate-system"]
+}
