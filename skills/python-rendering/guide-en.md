@@ -1,26 +1,31 @@
-# Python 3D Rendering Guide
+---
+name: python-rendering
+description: Use when writing Python 3D rendering code. Automatically applies when using Python rendering libraries like nvdiffrast, PyTorch3D, pyrender, Blender Python API, trimesh, Open3D. Essential for 3D mesh visualization, texture rendering, camera setup, and coordinate system conversion.
+---
+
+# Python 3D Rendering Skill
 
 ## Core Principle: Always Verify Visually
 
-After writing rendering code, you **must** verify the result image:
+After writing rendering code, you **must** visually verify the result image:
 
-1. Save to image file (`output.png`)
-2. Open and visually inspect the image
+1. Save the image to a file (`output.png`)
+2. Open the image file with the Read tool to visually verify
 3. If there are issues, fix and re-render
 4. Repeat until the result is correct
 
-**Never just write code and stop!**
+**Never just write code and call it done!**
 
 ---
 
 ## Coordinate Systems by Framework (Axis Conventions)
 
-Always check the coordinate system used in your project before rendering.
+Always check which coordinate system your project uses before rendering.
 
 ### Important: Two Meanings of "Forward"
 
-- **Object Forward**: Direction the object/character faces
-- **Camera Look**: Direction the camera looks at (usually -Z)
+- **Object Forward**: The direction an object/character faces as "front"
+- **Camera Look**: The direction the camera looks at (usually -Z)
 
 These are different! Don't confuse them.
 
@@ -30,19 +35,19 @@ These are different! Don't confuse them.
 |-----------|-----|----------------|-------------|------------|-------|
 | **OpenGL** | +Y | - | -Z | Right-handed | NDC is left-handed! |
 | **Blender** | +Z | +Y | -Z (local) | Right-handed | Camera local -Z |
-| **PyTorch3D** | +Y | - | -Z (world) | Right-handed | +Z=viewer in NDC |
+| **PyTorch3D** | +Y | - | -Z (world) | Right-handed | +Z=viewer side in NDC |
 | **nvdiffrast** | +Y | - | -Z | Right-handed | OpenGL clip space |
 | **pyrender** | +Y | - | -Z | Right-handed | Follows OpenGL |
 | **Open3D** | +Y | - | -Z | Right-handed | |
-| **trimesh** | (none) | - | -Z (scene) | - | No enforced coordinate system! |
+| **trimesh** | (none) | - | -Z (scene) | - | No enforced coord system! |
 | **Unity** | +Y | +Z | +Z | Left-handed | |
 | **DirectX** | +Y | +Z | +Z | Left-handed | |
 
-### Important Notes
+### Cautions
 
-1. **trimesh doesn't enforce a coordinate system** - Uses the loaded file's coordinate system as-is
+1. **trimesh does not enforce any coordinate system** - Uses the file's original coordinate system
 2. **OpenGL NDC is left-handed** - Z flips when projecting from View Space (right-handed)
-3. **Blender camera** - Camera object looks at local -Z (different from object forward +Y)
+3. **Blender camera** - Camera object looks at its local -Z (different from object forward +Y)
 
 ### Coordinate Conversion Examples
 
@@ -72,18 +77,18 @@ def convert_opengl_to_blender(vertices):
 ### Verification Method
 
 After coordinate conversion, always:
-1. Render and save as image
-2. Visually check the image
-3. Verify the model appears in the correct orientation
+1. Render and save to an image
+2. Check the image with the Read tool
+3. Visually verify the model is oriented correctly
 
 ---
 
-## Checklist: Pre-Rendering Verification
+## Checklist: Pre-Rendering Checks
 
-### 1. Verify Mesh Data
+### 1. Check Mesh Data
 
 ```python
-# Always check after loading mesh
+# After loading mesh, always check
 print(f"Vertices: {vertices.shape}")  # (N, 3)
 print(f"Faces: {faces.shape}")        # (M, 3)
 print(f"Vertex range: {vertices.min(axis=0)} ~ {vertices.max(axis=0)}")
@@ -99,34 +104,34 @@ if hasattr(mesh, 'visual') and hasattr(mesh.visual, 'vertex_colors'):
     HAS_VERTEX_COLORS = True
 ```
 
-### 2. Handle Texture/Vertex Colors
+### 2. Texture/Vertex Color Handling
 
-**If texture exists, you MUST render with texture!**
-**If vertex colors exist, you MUST render with vertex colors!**
+**If there's a texture, you MUST render with the texture!**
+**If there are vertex colors, you MUST render with vertex colors!**
 
 ```python
-# Check in trimesh
+# Checking in trimesh
 import trimesh
 
 mesh = trimesh.load('model.obj')
 
 if isinstance(mesh.visual, trimesh.visual.TextureVisuals):
-    # Has texture -> Need texture rendering
+    # Has texture -> texture rendering required
     texture_image = mesh.visual.material.image
     uv_coords = mesh.visual.uv
     print("Texture rendering required!")
 
 elif isinstance(mesh.visual, trimesh.visual.ColorVisuals):
-    # Has vertex colors -> Need vertex color rendering
+    # Has vertex colors -> vertex color rendering required
     vertex_colors = mesh.visual.vertex_colors
     print("Vertex color rendering required!")
 ```
 
-### 3. Check Lighting
+### 3. Lighting Check
 
 **Rendering without lighting results in a black screen!**
 
-If no lighting exists, notify the user and:
+If there's no lighting, inform the user and:
 - Add default lighting
 - Or use flat shading / unlit rendering
 
@@ -134,7 +139,7 @@ If no lighting exists, notify the user and:
 # pyrender lighting example
 import pyrender
 
-# Add default light
+# Add basic light
 light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=3.0)
 scene.add(light, pose=np.eye(4))
 
@@ -142,70 +147,164 @@ scene.add(light, pose=np.eye(4))
 scene.ambient_light = [0.3, 0.3, 0.3]
 ```
 
+### pyrender DirectionalLight Direction Setup (Important!)
+
+**DirectionalLight emits light in the -Z axis direction of its local coordinate system.**
+
+```
+Light object's local coordinate system:
+
+        Y (up)
+        |
+        |
+        +-----> X (right)
+       /
+      /
+     Z (forward)
+
+Light is emitted in -Z direction
+```
+
+**pose matrix = defines how to place the local coordinate system in world space**
+
+```python
+# DirectionalLight has no direction parameter!
+light = pyrender.DirectionalLight(color=[1,1,1], intensity=10.0)
+
+# Direction is set via pose (pose's Z axis = local Z axis direction in world)
+scene.add(light, pose=light_pose)
+```
+
+**To emit light in a specific direction:**
+
+```python
+def make_light_pose(direction):
+    """Create pose to emit light in the given direction"""
+    d = np.array(direction) / np.linalg.norm(direction)
+
+    # Light emits in local -Z
+    # For local -Z to become world d -> set local Z to -d
+    pose = np.eye(4)
+    pose[:3, 2] = -d  # Z axis -> -d (then -Z axis -> d)
+
+    # Calculate X, Y axes too (complete orthogonal coordinate system)
+    up = np.array([0, 1, 0])
+    right = np.cross(up, -d)
+    if np.linalg.norm(right) < 1e-6:
+        right = np.array([1, 0, 0])
+    right /= np.linalg.norm(right)
+    pose[:3, 0] = right
+    pose[:3, 1] = np.cross(-d, right)
+
+    return pose
+
+# Usage: emit light in [1, 1.5, 1] direction
+light = pyrender.DirectionalLight(color=[1,1,1], intensity=20.0)
+scene.add(light, pose=make_light_pose([1, 1.5, 1]))
+```
+
 ---
 
 ## Basic Rendering Templates by Framework
 
-### pyrender (Simplest)
+### pyrender (Recommended - 3-point Lighting + RGBA Output)
 
 ```python
 import numpy as np
 import trimesh
 import pyrender
 from PIL import Image
+import os
+import random
 
-# Load mesh
-mesh = trimesh.load('model.obj')
+os.environ['PYOPENGL_PLATFORM'] = 'egl'  # Headless environment
 
-# Convert to pyrender mesh
-if isinstance(mesh.visual, trimesh.visual.TextureVisuals):
-    # Has texture
-    pr_mesh = pyrender.Mesh.from_trimesh(mesh)
-else:
-    # No texture - apply default material
-    material = pyrender.MetallicRoughnessMaterial(
-        baseColorFactor=[0.8, 0.8, 0.8, 1.0]
+def render_mesh(glb_path, output_path, azimuth=45, elevation=30, image_size=512):
+    """3-point lighting + transparent background RGBA rendering"""
+
+    # Load mesh (apply scene graph transforms!)
+    scene = trimesh.load(glb_path, force='scene')
+    mesh = scene.to_geometry()
+    if isinstance(mesh, trimesh.Scene):
+        meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
+        mesh = trimesh.util.concatenate(meshes)
+
+    # Normalize: center + fit in unit sphere
+    mesh.vertices -= mesh.vertices.mean(axis=0)
+    mesh.vertices /= np.abs(mesh.vertices).max()
+
+    # Create scene - low ambient (for shading contrast)
+    pr_scene = pyrender.Scene(
+        bg_color=[0.0, 0.0, 0.0, 0.0],  # Transparent background!
+        ambient_light=[0.02, 0.02, 0.02]  # Low ambient
     )
-    pr_mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
+    pr_scene.add(pyrender.Mesh.from_trimesh(mesh, smooth=True))
 
-# Create scene
-scene = pyrender.Scene(ambient_light=[0.3, 0.3, 0.3])
-scene.add(pr_mesh)
+    # Camera - phone camera FOV (can randomize), adjust framing with distance
+    fov_deg = random.uniform(60, 75)  # Phone camera range
+    fov = np.radians(fov_deg)
+    distance = 2.5   # Adjust framing with distance (for normalized mesh)
 
-# Add lighting (required!)
-light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=3.0)
-light_pose = np.array([
-    [1, 0, 0, 0],
-    [0, 1, 0, 0],
-    [0, 0, 1, 3],
-    [0, 0, 0, 1]
-])
-scene.add(light, pose=light_pose)
+    azim_rad, elev_rad = np.radians(azimuth), np.radians(elevation)
+    cam_pos = np.array([
+        distance * np.cos(elev_rad) * np.sin(azim_rad),
+        distance * np.sin(elev_rad),
+        distance * np.cos(elev_rad) * np.cos(azim_rad)
+    ])
 
-# Camera setup
-camera = pyrender.PerspectiveCamera(yfov=np.pi / 3.0)
-# Calculate camera position based on mesh bounding box
-bounds = mesh.bounds
-center = (bounds[0] + bounds[1]) / 2
-extent = np.linalg.norm(bounds[1] - bounds[0])
-camera_distance = extent * 1.5
+    # Look-at matrix
+    forward = -cam_pos / np.linalg.norm(cam_pos)
+    right = np.cross(forward, [0, 1, 0])
+    if np.linalg.norm(right) < 1e-6:
+        right = np.array([1, 0, 0])
+    right = right / np.linalg.norm(right)
+    up = np.cross(right, forward)
 
-camera_pose = np.array([
-    [1, 0, 0, center[0]],
-    [0, 1, 0, center[1]],
-    [0, 0, 1, center[2] + camera_distance],
-    [0, 0, 0, 1]
-])
-scene.add(camera, pose=camera_pose)
+    cam_pose = np.eye(4)
+    cam_pose[:3, 0], cam_pose[:3, 1], cam_pose[:3, 2], cam_pose[:3, 3] = right, up, -forward, cam_pos
+    pr_scene.add(pyrender.PerspectiveCamera(yfov=fov), pose=cam_pose)
 
-# Render
-renderer = pyrender.OffscreenRenderer(800, 600)
-color, depth = renderer.render(scene)
+    # === 3-Point Lighting (shading with lights only, no ambient) ===
+    def make_light_pose(direction):
+        d = np.array(direction) / np.linalg.norm(direction)
+        pose = np.eye(4)
+        pose[:3, 2] = -d
+        r = np.cross([0, 1, 0], -d)
+        if np.linalg.norm(r) < 1e-6:
+            r = np.array([1, 0, 0])
+        pose[:3, 0] = r / np.linalg.norm(r)
+        pose[:3, 1] = np.cross(-d, pose[:3, 0])
+        return pose
 
-# Save
-Image.fromarray(color).save('output.png')
-print("Rendering complete: output.png")
+    # 5-point lighting (final)
+    pr_scene.add(pyrender.DirectionalLight(color=[1, 1, 1], intensity=40.0),
+                 pose=make_light_pose([1, 1.5, 1]))       # Key (upper right front)
+    pr_scene.add(pyrender.DirectionalLight(color=[0.9, 0.9, 1], intensity=35.0),
+                 pose=make_light_pose([-1, 0.5, 0.5]))    # Fill (left)
+    pr_scene.add(pyrender.DirectionalLight(color=[1, 1, 1], intensity=30.0),
+                 pose=make_light_pose([0, 0.3, -1]))      # Rim (back)
+    pr_scene.add(pyrender.DirectionalLight(color=[1, 1, 1], intensity=30.0),
+                 pose=make_light_pose([0, 1, 0]))         # Top
+    pr_scene.add(pyrender.DirectionalLight(color=[0.8, 0.8, 0.9], intensity=15.0),
+                 pose=make_light_pose([0, -1, 0.2]))      # Bottom (weak)
+
+    # Render (2x supersampling for AA)
+    renderer = pyrender.OffscreenRenderer(image_size * 2, image_size * 2)
+    color, _ = renderer.render(pr_scene, flags=pyrender.RenderFlags.RGBA)
+    renderer.delete()
+
+    # LANCZOS downsampling + RGBA PNG save
+    img = Image.fromarray(color).resize((image_size, image_size), Image.LANCZOS)
+    img.save(output_path)  # Save RGBA as-is (preserve transparent background)
 ```
+
+**Key Points:**
+- `ambient_light=[0.02, 0.02, 0.02]`: Low ambient -> maximum shading contrast
+- `bg_color=[0, 0, 0, 0]`: Transparent background
+- `fov = 60~75 degrees`: Phone camera level, can be randomized
+- 5-point lighting: Key(40) + Fill(35) + Rim(30) + Top(30) + Bottom(15)
+- `distance = 2.5`: For normalized mesh, adjust framing with distance (not FOV)
+- RGBA PNG save: Preserve transparent background
 
 ### PyTorch3D
 
@@ -272,12 +371,12 @@ from PIL import Image
 # CUDA context
 glctx = dr.RasterizeCudaContext()
 
-# Prepare mesh data (OpenGL coordinates: Y-up, -Z forward)
+# Prepare mesh data (OpenGL coordinate system: Y-up, -Z forward)
 vertices = torch.tensor(vertices, dtype=torch.float32, device='cuda')  # (N, 3)
 faces = torch.tensor(faces, dtype=torch.int32, device='cuda')          # (M, 3)
 
 # Transform vertices to clip space
-# Need to apply MVP matrix
+# MVP matrix needed
 def make_mvp(eye, target, up, fov, aspect, near, far):
     # View matrix
     z = eye - target
@@ -314,10 +413,10 @@ mvp = make_mvp(
 pos_clip = vertices @ mvp[:3, :3].T + mvp[:3, 3]
 pos_clip = torch.cat([pos_clip, torch.ones_like(pos_clip[:, :1])], dim=-1)
 
-# Rasterization
+# Rasterize
 rast, _ = dr.rasterize(glctx, pos_clip[None], faces, resolution=[512, 512])
 
-# Interpolation (vertex colors or texture coordinates)
+# Interpolate (vertex colors or texture coordinates)
 if HAS_VERTEX_COLORS:
     colors = torch.tensor(vertex_colors[:, :3] / 255.0, dtype=torch.float32, device='cuda')
     color, _ = dr.interpolate(colors[None], rast, faces)
@@ -342,7 +441,7 @@ import numpy as np
 # Load mesh
 mesh = o3d.io.read_triangle_mesh("model.obj")
 
-# Check texture
+# Check for texture
 if mesh.has_triangle_uvs() and len(mesh.textures) > 0:
     print("Has texture - texture rendering")
 elif mesh.has_vertex_colors():
@@ -351,7 +450,7 @@ else:
     # Apply default color
     mesh.paint_uniform_color([0.8, 0.8, 0.8])
 
-# Compute normals (required for lighting)
+# Compute normals (needed for lighting)
 mesh.compute_vertex_normals()
 
 # Offscreen rendering
@@ -377,9 +476,9 @@ print("Rendering complete: output.png")
 
 ## Headless Rendering (EGL Setup)
 
-EGL is required for rendering on servers or headless environments.
+EGL is required when rendering on a server or headless environment.
 
-### EGL Installation Check
+### EGL Installation Check and Setup
 
 ```bash
 # Check EGL installation
@@ -396,7 +495,7 @@ sudo apt-get install libegl1-mesa-dev libgl1-mesa-dev
 
 ```python
 import os
-os.environ['PYOPENGL_PLATFORM'] = 'egl'  # Must be set before import!
+os.environ['PYOPENGL_PLATFORM'] = 'egl'  # Must be before import!
 
 import pyrender
 # ... rest of code
@@ -425,17 +524,17 @@ When rendering results are wrong:
 - [ ] Are near/far planes appropriate?
 
 ### Mesh Appears Flipped
-- [ ] Is coordinate conversion needed?
+- [ ] Is coordinate system conversion needed?
 - [ ] Is face winding order correct? (CCW vs CW)
-- [ ] Are normals pointing the right direction?
+- [ ] Are normals pointing correctly?
 
 ### Texture Not Visible
-- [ ] Are UV coordinates present?
+- [ ] Are there UV coordinates?
 - [ ] Is the texture image loaded?
 - [ ] Is UV range [0, 1]?
 
-### Wrong Colors
-- [ ] Is color value range correct? ([0,1] vs [0,255])
+### Strange Colors
+- [ ] Is the color value range correct? ([0,1] vs [0,255])
 - [ ] Is RGB vs BGR order correct?
 
 ---
@@ -443,11 +542,11 @@ When rendering results are wrong:
 ## Pre-Completion Checklist
 
 1. **Did you save the rendered image?**
-2. **Did you visually verify the image?**
+2. **Did you open the image with the Read tool to visually verify?**
 3. **Does the result match user expectations?**
 4. **Does the coordinate system match other parts of the project?**
 
-Rendering code is **not complete until you visually verify it!**
+Rendering code is **not complete until visually verified!**
 
 ---
 
@@ -457,11 +556,11 @@ Rendering code is **not complete until you visually verify it!**
 
 | Library | Python 3.10 | Python 3.11 | Python 3.12 | Python 3.13 | Notes |
 |---------|-------------|-------------|-------------|-------------|-------|
-| trimesh | ✅ | ✅ | ✅ | ✅ | Requires pyglet<2 |
-| pyrender | ✅ | ✅ | ⚠️ | ❌ | OpenGL context issues |
-| PyTorch3D | ✅ | ✅ | ✅ | ⚠️ | Requires CUDA |
-| nvdiffrast | ✅ | ✅ | ✅ | ⚠️ | Requires CUDA |
-| Open3D | ✅ | ✅ | ✅ | ⚠️ | |
+| trimesh | OK | OK | OK | OK | Requires pyglet<2 |
+| pyrender | OK | OK | Warning | No | OpenGL context issues |
+| PyTorch3D | OK | OK | OK | Warning | Requires CUDA |
+| nvdiffrast | OK | OK | OK | Warning | Requires CUDA |
+| Open3D | OK | OK | OK | Warning | |
 
 ### Quick Environment Check
 
@@ -492,14 +591,14 @@ pip install "pyglet<2"
 python -c "import pyglet; print(pyglet.version)"  # Should be 1.5.x
 ```
 
-**Error when rendering with pyglet 2.x installed:**
+**Error when rendering with trimesh with pyglet 2.x installed:**
 ```
 ImportError: `trimesh.viewer.windowed` requires `pip install "pyglet<2"`
 ```
 
 ### pyrender Windows Troubleshooting
 
-**OpenGL error on Python 3.12+:**
+**When OpenGL error occurs on Python 3.12+:**
 ```
 ctypes.ArgumentError: argument 2: TypeError: No array-type handler...
 ```
@@ -534,7 +633,7 @@ pip install open3d-gpu
 # Check CUDA version
 nvidia-smi
 
-# Install PyTorch first (match CUDA version)
+# Install PyTorch first (matching CUDA version)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
 # Install PyTorch3D
@@ -563,17 +662,17 @@ pip install "pyglet<2"  # For rendering
 # 3. Open3D (optional)
 pip install open3d
 
-# 4. pyrender (Python 3.11 or lower only)
+# 4. pyrender (only on Python 3.11 or lower)
 pip install pyrender
 
-# 5. PyTorch3D / nvdiffrast (if GPU rendering needed)
+# 5. PyTorch3D / nvdiffrast (when GPU rendering needed)
 # Install according to CUDA environment
 ```
 
 ### Renderer Selection Guide
 
-| Use Case | Recommended Renderer | Notes |
-|----------|---------------------|-------|
+| Situation | Recommended Renderer | Notes |
+|-----------|---------------------|-------|
 | Quick preview | trimesh | Requires pyglet<2 |
 | Texture + lighting rendering | pyrender | Basic PBR support |
 | Differentiable rendering (training) | PyTorch3D, nvdiffrast | Requires CUDA |
@@ -599,7 +698,7 @@ extent = np.linalg.norm(bounds[1] - bounds[0])
 scene.camera.resolution = [1024, 768]
 scene.camera.fov = [45, 35]
 
-# Camera position (from above at an angle)
+# Camera position (from slightly above)
 distance = extent * 1.0
 azimuth, elevation = np.radians(30), np.radians(25)
 
@@ -626,12 +725,12 @@ with open('output.png', 'wb') as f:
     f.write(png_data)
 
 print("Rendering complete!")
-# Always visually verify output.png!
+# Always open output.png with Read tool to visually verify!
 ```
 
 ### pyrender Texture Rendering Template (Verified)
 
-**Important: pyrender supports texture rendering directly. No need to convert to vertex colors!**
+**Important: pyrender supports texture rendering. No need to convert to vertex colors!**
 
 ```python
 import numpy as np
@@ -651,7 +750,7 @@ else:
 # Create pyrender Scene
 scene = pyrender.Scene(ambient_light=[0.3, 0.3, 0.3], bg_color=[0.95, 0.95, 0.95, 1.0])
 
-# Add all geometries (textures automatically applied)
+# Add all geometry (texture auto-applied)
 for geom in geometries:
     pr_mesh = pyrender.Mesh.from_trimesh(geom)  # Includes texture!
     scene.add(pr_mesh)
@@ -697,7 +796,7 @@ color, depth = renderer.render(scene)
 renderer.delete()
 
 Image.fromarray(color).save('output.png')
-# Always visually verify output.png!
+# Always open output.png with Read tool to visually verify!
 ```
 
 ---
@@ -707,68 +806,68 @@ Image.fromarray(color).save('output.png')
 ### Unavailable Settings
 
 ```python
-# ❌ Not available on Windows
+# Not available on Windows
 os.environ['PYOPENGL_PLATFORM'] = 'osmesa'  # No OSMesa
 os.environ['PYOPENGL_PLATFORM'] = 'egl'     # EGL not supported by default
 ```
 
-### Recommended Methods for Windows
+### Recommended Methods on Windows
 
 1. **trimesh + pyglet<2**: Most stable
 2. **pyrender default settings**: Works in most cases
-3. **If headless needed**: Use virtual display or GPU server
+3. **When headless needed**: Use virtual display or GPU server
 
 ---
 
-## Texture Rendering Notes
+## Texture Rendering Cautions
 
-### ❌ Method to Avoid: Texture → Vertex Color Conversion
+### Avoid: Texture to Vertex Color Conversion
 
 ```python
-# ❌ This method loses 90%+ of texture information
+# This method loses 90%+ of texture information
 vertex_colors = geom.visual.to_color().vertex_colors  # Only as last resort!
 ```
 
-**Information Loss Example:**
+**Information loss example:**
 - Original texture: 1024 x 1024 = 1,048,576 pixels
 - Vertex colors: 63,892 points
 - Loss rate: **93.9%**
 
-pyrender supports textures directly, so no conversion needed!
+pyrender directly supports textures, so no conversion needed!
 
 ---
 
-## trimesh Scene Loading with Transform Application (Important!)
+## trimesh Scene Loading Transform Application (Important!)
 
-### Problem: GLB/GLTF Scene Graph Transforms Not Applied
+### Problem: GLB/GLTF Scene Graph Transform Not Applied
 
 GLB/GLTF files store transformation matrices (rotation, scale, translation) in the scene graph.
 `scene.geometry.values()` returns **only original vertices** without applying transforms!
 
 ```python
-# ❌ Wrong method (transforms not applied - model orientation will be wrong)
+# Wrong method (transforms not applied - model orientation incorrect)
 scene = trimesh.load(path, force='scene')
 meshes = [g for g in scene.geometry.values() if isinstance(g, trimesh.Trimesh)]
 mesh = trimesh.util.concatenate(meshes)
 
-# ✅ Correct method (scene graph transforms applied)
+# Correct method (apply scene graph transforms)
 scene = trimesh.load(path, force='scene')
-mesh = scene.to_geometry()  # Applies all transforms!
+mesh = scene.to_geometry()  # Apply all transforms!
 if isinstance(mesh, trimesh.Scene):
-    # If still a Scene, concatenate
+    # Still a Scene, concatenate
     meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
     mesh = trimesh.util.concatenate(meshes)
 ```
 
 ### Why Is This Important?
 
-GLB files exported from Sketchfab contain Z-up → Y-up transformation matrix in the root node:
+GLB files exported from Sketchfab include a Z-up to Y-up transformation matrix in the root node:
 ```
 Matrix: [1, 0, 0, 0,  0, 0, -1, 0,  0, 1, 0, 0,  0, 0, 0, 1]
-# = -90 degree rotation around X axis (Z-up to Y-up)
+# = -90 degree rotation around X axis (from Z-up to Y-up)
 ```
 
-Loading without `to_geometry()` will make the model appear **lying on its side or flipped**.
+Loading without `to_geometry()` will make the model appear **lying sideways or flipped**.
 
 ---
 
@@ -778,13 +877,13 @@ Loading without `to_geometry()` will make the model appear **lying on its side o
 
 - Original models: Mostly **Z-up** (created in Blender, 3ds Max, etc.)
 - GLTF export: Sketchfab converts to **Y-up** (applies matrix to root node)
-- trimesh loading: Must use `to_geometry()` to apply transforms
+- trimesh load: Must use `to_geometry()` for transforms to apply
 
 ### Cautions
 
-1. **Some models use non-standard transforms** - Different creators model in different orientations
-2. **100% consistent orientation not guaranteed** - Most work, but some may still be misaligned
-3. **How to check transform matrix**:
+1. **Some models use non-standard transforms** - Creators model in different orientations
+2. **100% consistent orientation not guaranteed** - Most are fine but some may still be wrong
+3. **How to check transformation matrix**:
 ```python
 import pygltflib
 gltf = pygltflib.GLTF2().load(path)
@@ -805,36 +904,97 @@ import pandas as pd
 ds = load_dataset("cindyxl/ObjaversePlusPlus")
 df = ds['train'].to_pandas()
 
-# Recommended filtering conditions
+# Recommended filtering conditions (single objects)
 filtered = df[
-    (df['is_scene'] == 'false') &        # Exclude scenes (single objects only)
-    (df['is_single_color'] == 'false') & # Exclude single-colored
+    (df['is_scene'] == 'false') &        # Exclude scenes
+    (df['is_multi_object'] == 'false') & # Exclude multi-objects (single objects only!)
+    (df['is_single_color'] == 'false') & # Exclude single color
     (df['is_transparent'] == 'false') &  # Exclude transparent
-    (df['style'] != 'scanned') &         # Exclude scanned (often no textures)
+    (df['style'] != 'scanned') &         # Exclude scanned (often no texture)
     (df['score'] == 3)                   # Highest quality only
 ]
 
-# Result: ~150k high-quality textured models
+# Result: Approximately 200K high-quality single objects
 print(f"Filtered: {len(filtered)}")
 ```
 
-### Quality Score Meaning
+### Quality Score Meanings
 
 | Score | Meaning | Texture |
 |-------|---------|---------|
-| 0 | Meaningless, damaged | ❌ |
-| 1 | Identifiable but incomplete | △ |
-| 2 | Clear shape + adequate texture | ✅ |
-| 3 | Excellent quality + professional texture | ✅✅ |
+| 0 | Meaningless, damaged | No |
+| 1 | Identifiable but incomplete | Maybe |
+| 2 | Clear shape + adequate texture | Yes |
+| 3 | Excellent quality + professional texture | Yes (high quality) |
 
 ### Style Characteristics
 
 | Style | Texture | Notes |
 |-------|---------|-------|
-| realistic | ✅ Usually present | Recommended |
-| anime | ✅ Present | Character-focused |
-| cartoon | ✅ Present | |
-| scanned | △ Often missing | Often only vertex colors |
+| realistic | Mostly present | Recommended |
+| anime | Present | Character-focused |
+| cartoon | Present | |
+| scanned | Often missing | Often only vertex colors |
+
+---
+
+## Anti-Aliasing (Smooth Edge Processing)
+
+### pyrender: 2x Supersampling + LANCZOS (Recommended)
+
+pyrender is OpenGL-based, so supersampling produces clean anti-aliasing.
+
+```python
+import pyrender
+from PIL import Image
+
+# Render at 2x resolution
+final_size = 512
+render_size = final_size * 2  # 1024
+
+renderer = pyrender.OffscreenRenderer(render_size, render_size)
+color, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
+renderer.delete()
+
+# LANCZOS downsampling for anti-aliasing
+image = Image.fromarray(color)
+image = image.resize((final_size, final_size), Image.LANCZOS)
+image.save('output.png')
+```
+
+**Result**: Smooth edges without triangle artifacts
+
+### PyTorch3D: SoftPhongShader Is Not Suitable for Visualization!
+
+**Warning**: PyTorch3D's `SoftPhongShader` is for **differentiable rendering**,
+and produces **triangle mesh artifacts**. Not suitable for visualization!
+
+```python
+# Not suitable for visualization - triangle artifacts
+from pytorch3d.renderer import SoftPhongShader
+shader = SoftPhongShader(device=device, cameras=cameras, lights=lights)
+
+# HardPhongShader is also not perfect
+from pytorch3d.renderer import HardPhongShader
+shader = HardPhongShader(device=device, cameras=cameras, lights=lights)
+```
+
+**If you must use PyTorch3D for visualization**:
+- Apply 2x+ supersampling
+- Or use pyrender/Blender instead
+
+### Other Rendering APIs
+
+Each rendering API has different appropriate anti-aliasing methods:
+
+| API | Anti-Aliasing Method | Notes |
+|-----|---------------------|-------|
+| **pyrender** | 2x Supersampling + LANCZOS | Verified |
+| **PyTorch3D** | Supersampling only (shader artifacts) | SoftPhongShader not suitable for visualization |
+| **nvdiffrast** | `dr.antialias()` function provided | Needs verification |
+| **Blender EEVEE** | `scene.eevee.taa_render_samples` | Temporal AA |
+| **Open3D** | Separate settings required | Needs verification |
+| **trimesh** | pyglet dependent, limited | Needs verification |
 
 ---
 

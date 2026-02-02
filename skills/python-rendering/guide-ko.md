@@ -147,70 +147,164 @@ scene.add(light, pose=np.eye(4))
 scene.ambient_light = [0.3, 0.3, 0.3]
 ```
 
+### pyrender DirectionalLight 방향 설정 (중요!)
+
+**DirectionalLight는 자신의 로컬 좌표계에서 -Z축 방향으로 빛을 쏜다.**
+
+```
+빛 오브젝트의 로컬 좌표계:
+
+        Y (up)
+        |
+        |
+        +----→ X (right)
+       /
+      /
+     Z (forward)
+
+빛은 -Z 방향으로 나감
+```
+
+**pose 행렬 = 로컬 좌표계를 월드에 어떻게 배치할지 정의**
+
+```python
+# DirectionalLight는 direction 파라미터가 없다!
+light = pyrender.DirectionalLight(color=[1,1,1], intensity=10.0)
+
+# 방향은 pose로 설정 (pose의 Z축 = 로컬 Z축의 월드 방향)
+scene.add(light, pose=light_pose)
+```
+
+**특정 방향으로 빛을 쏘려면:**
+
+```python
+def make_light_pose(direction):
+    """direction 방향으로 빛을 쏘는 pose 생성"""
+    d = np.array(direction) / np.linalg.norm(direction)
+
+    # 빛은 로컬 -Z로 나감
+    # 로컬 -Z가 월드의 d가 되려면 → 로컬 Z를 -d로 설정
+    pose = np.eye(4)
+    pose[:3, 2] = -d  # Z축 → -d (그러면 -Z축 → d)
+
+    # X, Y축도 계산 (직교 좌표계 완성)
+    up = np.array([0, 1, 0])
+    right = np.cross(up, -d)
+    if np.linalg.norm(right) < 1e-6:
+        right = np.array([1, 0, 0])
+    right /= np.linalg.norm(right)
+    pose[:3, 0] = right
+    pose[:3, 1] = np.cross(-d, right)
+
+    return pose
+
+# 사용: [1, 1.5, 1] 방향으로 빛 쏘기
+light = pyrender.DirectionalLight(color=[1,1,1], intensity=20.0)
+scene.add(light, pose=make_light_pose([1, 1.5, 1]))
+```
+
 ---
 
 ## 프레임워크별 기본 렌더링 템플릿
 
-### pyrender (가장 간단)
+### pyrender (권장 - 3-point 조명 + RGBA 출력)
 
 ```python
 import numpy as np
 import trimesh
 import pyrender
 from PIL import Image
+import os
+import random
 
-# 메시 로드
-mesh = trimesh.load('model.obj')
+os.environ['PYOPENGL_PLATFORM'] = 'egl'  # Headless 환경
 
-# pyrender 메시로 변환
-if isinstance(mesh.visual, trimesh.visual.TextureVisuals):
-    # 텍스처가 있는 경우
-    pr_mesh = pyrender.Mesh.from_trimesh(mesh)
-else:
-    # 텍스처 없는 경우 - 기본 머티리얼 적용
-    material = pyrender.MetallicRoughnessMaterial(
-        baseColorFactor=[0.8, 0.8, 0.8, 1.0]
+def render_mesh(glb_path, output_path, azimuth=45, elevation=30, image_size=512):
+    """3-point 조명 + 투명 배경 RGBA 렌더링"""
+
+    # 메시 로드 (씬 그래프 변환 적용!)
+    scene = trimesh.load(glb_path, force='scene')
+    mesh = scene.to_geometry()
+    if isinstance(mesh, trimesh.Scene):
+        meshes = [g for g in mesh.geometry.values() if isinstance(g, trimesh.Trimesh)]
+        mesh = trimesh.util.concatenate(meshes)
+
+    # 정규화: 중심 이동 + 단위 구 안에 맞춤
+    mesh.vertices -= mesh.vertices.mean(axis=0)
+    mesh.vertices /= np.abs(mesh.vertices).max()
+
+    # 씬 생성 - 낮은 ambient (shading 대비용)
+    pr_scene = pyrender.Scene(
+        bg_color=[0.0, 0.0, 0.0, 0.0],  # 투명 배경!
+        ambient_light=[0.02, 0.02, 0.02]  # 낮은 ambient
     )
-    pr_mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
+    pr_scene.add(pyrender.Mesh.from_trimesh(mesh, smooth=True))
 
-# 씬 생성
-scene = pyrender.Scene(ambient_light=[0.3, 0.3, 0.3])
-scene.add(pr_mesh)
+    # 카메라 - 핸드폰 카메라 FOV (랜덤화 가능), 거리로 프레이밍 조절
+    fov_deg = random.uniform(60, 75)  # 핸드폰 카메라 범위
+    fov = np.radians(fov_deg)
+    distance = 2.5   # 거리로 프레이밍 조절 (정규화된 메시 기준)
 
-# 조명 추가 (필수!)
-light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=3.0)
-light_pose = np.array([
-    [1, 0, 0, 0],
-    [0, 1, 0, 0],
-    [0, 0, 1, 3],
-    [0, 0, 0, 1]
-])
-scene.add(light, pose=light_pose)
+    azim_rad, elev_rad = np.radians(azimuth), np.radians(elevation)
+    cam_pos = np.array([
+        distance * np.cos(elev_rad) * np.sin(azim_rad),
+        distance * np.sin(elev_rad),
+        distance * np.cos(elev_rad) * np.cos(azim_rad)
+    ])
 
-# 카메라 설정
-camera = pyrender.PerspectiveCamera(yfov=np.pi / 3.0)
-# 메시 바운딩 박스 기준으로 카메라 위치 계산
-bounds = mesh.bounds
-center = (bounds[0] + bounds[1]) / 2
-extent = np.linalg.norm(bounds[1] - bounds[0])
-camera_distance = extent * 1.5
+    # Look-at 행렬
+    forward = -cam_pos / np.linalg.norm(cam_pos)
+    right = np.cross(forward, [0, 1, 0])
+    if np.linalg.norm(right) < 1e-6:
+        right = np.array([1, 0, 0])
+    right = right / np.linalg.norm(right)
+    up = np.cross(right, forward)
 
-camera_pose = np.array([
-    [1, 0, 0, center[0]],
-    [0, 1, 0, center[1]],
-    [0, 0, 1, center[2] + camera_distance],
-    [0, 0, 0, 1]
-])
-scene.add(camera, pose=camera_pose)
+    cam_pose = np.eye(4)
+    cam_pose[:3, 0], cam_pose[:3, 1], cam_pose[:3, 2], cam_pose[:3, 3] = right, up, -forward, cam_pos
+    pr_scene.add(pyrender.PerspectiveCamera(yfov=fov), pose=cam_pose)
 
-# 렌더링
-renderer = pyrender.OffscreenRenderer(800, 600)
-color, depth = renderer.render(scene)
+    # === 3-Point 조명 (ambient 없이 조명만으로 shading) ===
+    def make_light_pose(direction):
+        d = np.array(direction) / np.linalg.norm(direction)
+        pose = np.eye(4)
+        pose[:3, 2] = -d
+        r = np.cross([0, 1, 0], -d)
+        if np.linalg.norm(r) < 1e-6:
+            r = np.array([1, 0, 0])
+        pose[:3, 0] = r / np.linalg.norm(r)
+        pose[:3, 1] = np.cross(-d, pose[:3, 0])
+        return pose
 
-# 저장
-Image.fromarray(color).save('output.png')
-print("렌더링 완료: output.png")
+    # 5-point 조명 (최종)
+    pr_scene.add(pyrender.DirectionalLight(color=[1, 1, 1], intensity=40.0),
+                 pose=make_light_pose([1, 1.5, 1]))       # Key (우상단 앞)
+    pr_scene.add(pyrender.DirectionalLight(color=[0.9, 0.9, 1], intensity=35.0),
+                 pose=make_light_pose([-1, 0.5, 0.5]))    # Fill (좌측)
+    pr_scene.add(pyrender.DirectionalLight(color=[1, 1, 1], intensity=30.0),
+                 pose=make_light_pose([0, 0.3, -1]))      # Rim (뒤)
+    pr_scene.add(pyrender.DirectionalLight(color=[1, 1, 1], intensity=30.0),
+                 pose=make_light_pose([0, 1, 0]))         # Top (위)
+    pr_scene.add(pyrender.DirectionalLight(color=[0.8, 0.8, 0.9], intensity=15.0),
+                 pose=make_light_pose([0, -1, 0.2]))      # Bottom (아래, 약하게)
+
+    # 렌더링 (2x supersampling for AA)
+    renderer = pyrender.OffscreenRenderer(image_size * 2, image_size * 2)
+    color, _ = renderer.render(pr_scene, flags=pyrender.RenderFlags.RGBA)
+    renderer.delete()
+
+    # LANCZOS 다운샘플링 + RGBA PNG 저장
+    img = Image.fromarray(color).resize((image_size, image_size), Image.LANCZOS)
+    img.save(output_path)  # RGBA 그대로 저장 (투명 배경 유지)
 ```
+
+**핵심 포인트:**
+- `ambient_light=[0.02, 0.02, 0.02]`: 낮은 ambient → shading 대비 최대
+- `bg_color=[0, 0, 0, 0]`: 투명 배경
+- `fov = 60~75도`: 핸드폰 카메라 수준, 랜덤화 가능
+- 5-point 조명: Key(40) + Fill(35) + Rim(30) + Top(30) + Bottom(15)
+- `distance = 2.5`: 정규화된 메시 기준, 거리로 프레이밍 조절 (FOV 변경 X)
+- RGBA PNG 저장: 투명 배경 유지
 
 ### PyTorch3D
 
@@ -810,16 +904,17 @@ import pandas as pd
 ds = load_dataset("cindyxl/ObjaversePlusPlus")
 df = ds['train'].to_pandas()
 
-# 권장 필터링 조건
+# 권장 필터링 조건 (단일 오브젝트)
 filtered = df[
-    (df['is_scene'] == 'false') &        # 씬 제외 (단일 오브젝트만)
+    (df['is_scene'] == 'false') &        # 씬 제외
+    (df['is_multi_object'] == 'false') & # 멀티 오브젝트 제외 (단일 오브젝트만!)
     (df['is_single_color'] == 'false') & # 단색 제외
     (df['is_transparent'] == 'false') &  # 투명 제외
     (df['style'] != 'scanned') &         # 스캔 모델 제외 (텍스처 없는 경우 많음)
     (df['score'] == 3)                   # 최고 품질만
 ]
 
-# 결과: 약 15만개의 고품질 텍스처 모델
+# 결과: 약 20만개의 고품질 단일 오브젝트
 print(f"Filtered: {len(filtered)}")
 ```
 
@@ -840,6 +935,66 @@ print(f"Filtered: {len(filtered)}")
 | anime | ✅ 있음 | 캐릭터 위주 |
 | cartoon | ✅ 있음 | |
 | scanned | △ 종종 없음 | 버텍스 컬러만 있는 경우 많음 |
+
+---
+
+## Anti-Aliasing (경계선 부드럽게 처리)
+
+### pyrender: 2x Supersampling + LANCZOS (권장)
+
+pyrender는 OpenGL 기반이므로 supersampling으로 깔끔한 anti-aliasing을 얻을 수 있다.
+
+```python
+import pyrender
+from PIL import Image
+
+# 2x 해상도로 렌더링
+final_size = 512
+render_size = final_size * 2  # 1024
+
+renderer = pyrender.OffscreenRenderer(render_size, render_size)
+color, depth = renderer.render(scene, flags=pyrender.RenderFlags.RGBA)
+renderer.delete()
+
+# LANCZOS 다운샘플링으로 anti-aliasing
+image = Image.fromarray(color)
+image = image.resize((final_size, final_size), Image.LANCZOS)
+image.save('output.png')
+```
+
+**결과**: 삼각형 아티팩트 없이 부드러운 경계선
+
+### PyTorch3D: SoftPhongShader는 시각화에 부적합!
+
+⚠️ **경고**: PyTorch3D의 `SoftPhongShader`는 **differentiable rendering**을 위한 것으로,
+**삼각형 메시 아티팩트**가 발생한다. 시각화 용도로는 부적합!
+
+```python
+# ❌ 시각화에 부적합 - 삼각형 아티팩트 발생
+from pytorch3d.renderer import SoftPhongShader
+shader = SoftPhongShader(device=device, cameras=cameras, lights=lights)
+
+# ⚠️ HardPhongShader도 완전하지 않음
+from pytorch3d.renderer import HardPhongShader
+shader = HardPhongShader(device=device, cameras=cameras, lights=lights)
+```
+
+**PyTorch3D를 시각화에 사용해야 한다면**:
+- 2x+ supersampling 적용
+- 또는 pyrender/Blender로 대체 권장
+
+### 다른 렌더링 API
+
+각 렌더링 API마다 적절한 anti-aliasing 방법이 다르므로 개별적으로 확인 필요:
+
+| API | Anti-Aliasing 방법 | 비고 |
+|-----|-------------------|------|
+| **pyrender** | 2x Supersampling + LANCZOS | ✅ 검증됨 |
+| **PyTorch3D** | Supersampling만 (shader 아티팩트 있음) | ⚠️ SoftPhongShader는 시각화 부적합 |
+| **nvdiffrast** | `dr.antialias()` 함수 제공 | 확인 필요 |
+| **Blender EEVEE** | `scene.eevee.taa_render_samples` | Temporal AA |
+| **Open3D** | 별도 설정 필요 | 확인 필요 |
+| **trimesh** | pyglet 의존, 제한적 | 확인 필요 |
 
 ---
 
